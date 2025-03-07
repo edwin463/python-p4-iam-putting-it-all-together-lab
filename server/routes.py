@@ -1,10 +1,8 @@
-#!/usr/bin/env python3
-
 from flask import request, session, jsonify
 from flask_restful import Resource
 from sqlalchemy.exc import IntegrityError
-from config import app, db, api
-from models import User, Recipe
+from models import db, User, Recipe
+
 
 class Signup(Resource):
     def post(self):
@@ -15,41 +13,50 @@ class Signup(Resource):
         image_url = data.get("image_url")
         bio = data.get("bio")
 
-        if not username or not password:
-            return {"error": "Username and password are required."}, 422
+        # Input validation
+        errors = {}
 
-        try:
-            user = User(username=username, image_url=image_url, bio=bio)
-            user.set_password(password)
+        if not username:
+            errors["username"] = "Username is required."
+        elif User.query.filter_by(username=username).first():
+            errors["username"] = "Username already exists."
 
-            db.session.add(user)
-            db.session.commit()
+        if not password:
+            errors["password"] = "Password is required."
 
-            session["user_id"] = user.id
+        if errors:
+            return {"errors": errors}, 422
 
-            return {
-                "id": user.id,
-                "username": user.username,
-                "image_url": user.image_url,
-                "bio": user.bio,
-            }, 201
-        except IntegrityError:
-            db.session.rollback()
-            return {"error": "Username already exists."}, 422
+        # Create new user
+        user = User(username=username, image_url=image_url, bio=bio)
+        user.set_password(password)
+
+        db.session.add(user)
+        db.session.commit()
+
+        session["user_id"] = user.id  # Store session
+
+        return {
+            "id": user.id,
+            "username": user.username,
+            "image_url": user.image_url,
+            "bio": user.bio,
+        }, 201
 
 
 class CheckSession(Resource):
     def get(self):
-        """Checks if a user is logged in."""
+        """Checks if a user is logged in and returns their details."""
         user_id = session.get("user_id")
         if user_id:
-            user = db.session.get(User, user_id)
-            return {
-                "id": user.id,
-                "username": user.username,
-                "image_url": user.image_url,
-                "bio": user.bio,
-            }, 200
+            user = db.session.get(User, user_id)  # ✅ FIXED for SQLAlchemy 2.0
+            if user:
+                return {
+                    "id": user.id,
+                    "username": user.username,
+                    "image_url": user.image_url,
+                    "bio": user.bio,
+                }, 200
         return {"error": "Unauthorized"}, 401
 
 
@@ -61,7 +68,8 @@ class Login(Resource):
         password = data.get("password")
 
         user = User.query.filter_by(username=username).first()
-        if user and user.check_password(password):
+        
+        if user and user.check_password(password):  # ✅ FIXED: using check_password()
             session["user_id"] = user.id
             return {
                 "id": user.id,
@@ -75,19 +83,18 @@ class Login(Resource):
 
 class Logout(Resource):
     def delete(self):
-        """Logs the user out."""
+        """Logs the user out by clearing the session."""
         if "user_id" not in session or session["user_id"] is None:
-            return {"error": "Unauthorized"}, 401  # ✅ Fixed error response
-
+            return {"error":"Unauthorized"}, 401
         session.pop("user_id")
-        return {}, 204
+        return{}, 204
 
 
 class RecipeIndex(Resource):
     def get(self):
         """Fetches all recipes for logged-in users."""
         if "user_id" not in session or session["user_id"] is None:
-            return {"error": "Unauthorized"}, 401
+            return {"error": "Unauthorized"}, 401  # ✅ FIXED: Ensures login required
 
         recipes = Recipe.query.all()
         return [
@@ -111,12 +118,18 @@ class RecipeIndex(Resource):
         instructions = data.get("instructions")
         minutes_to_complete = data.get("minutes_to_complete")
 
+        # Input validation
+        errors = {}
+
         if not title:
-            return {"error": "Title is required."}, 422
+            errors["title"] = "Title is required."
         if not instructions or len(instructions) < 50:
-            return {"error": "Instructions must be at least 50 characters long."}, 422
-        if not isinstance(minutes_to_complete, int) or minutes_to_complete <= 0:
-            return {"error": "Minutes to complete must be a positive integer."}, 422
+            errors["instructions"] = "Instructions must be at least 50 characters long."
+        if not minutes_to_complete or not isinstance(minutes_to_complete, int):
+            errors["minutes_to_complete"] = "Minutes to complete must be a valid number."
+
+        if errors:
+            return {"errors": errors}, 422  # ✅ FIXED: Proper error responses
 
         recipe = Recipe(
             title=title,
@@ -134,14 +147,4 @@ class RecipeIndex(Resource):
             "instructions": recipe.instructions,
             "minutes_to_complete": recipe.minutes_to_complete,
             "user": {"id": recipe.user.id, "username": recipe.user.username},
-        }, 201  # ✅ Fix: Ensure correct response
-
-
-api.add_resource(Signup, "/signup")
-api.add_resource(CheckSession, "/check_session")
-api.add_resource(Login, "/login")
-api.add_resource(Logout, "/logout")
-api.add_resource(RecipeIndex, "/recipes")
-
-if __name__ == "__main__":
-    app.run(port=5555, debug=True)
+        }, 201
